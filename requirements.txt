@@ -1,0 +1,4 @@
+netmiko
+schedule
+pywin32
+pyinstaller
