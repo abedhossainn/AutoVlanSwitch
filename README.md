@@ -3,7 +3,6 @@
 [![GitHub release](https://img.shields.io/github/release/abedhossainn/AutoVlanSwitch.svg)](https://github.com/abedhossainn/AutoVlanSwitch/releases)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 > **Automated VLAN switching for Cisco switches with secure credential management and Windows service integration**
 
@@ -106,16 +105,6 @@ python secure_vlan_gui.py
   "enable_logging": true
 }
 ```
-
-## 📸 Screenshots
-
-### Main Interface
-![Main GUI](screenshots/main_gui.png)
-*Configuration panel with real-time activity monitoring*
-
-### Service Status
-![Service Status](screenshots/service_status.png)
-*Live service status, timer, and switching logs*
 
 ## 🛠️ Usage Scenarios
 
@@ -254,11 +243,7 @@ pip install -r requirements.txt
 python secure_vlan_gui.py
 ```
 
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 - **Cisco** - For comprehensive switch documentation
 - **Python Community** - For excellent networking libraries
