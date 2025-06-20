@@ -1,13 +1,13 @@
 {
-    "switch_ip": "192.168.1.1", 
-    "username": "admin",
-    "password": "password",
-    "enable_password": "enable_password",
+    "switch_ip": "10.0.0.122",
+    "username": "abed",
+    "password": "12345678",
+    "enable_password": "12345678",
     "interface": "GigabitEthernet0/1",
-    "schedule_minutes": 60,
+    "schedule_minutes": 1,
     "vlans": [
         "100",
-        "200", 
+        "200",
         "300",
         "400"
     ]

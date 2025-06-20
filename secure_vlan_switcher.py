@@ -5,6 +5,7 @@ import sys
 import time
 import schedule
 import argparse
+import keyring
 from pathlib import Path
 
 # Windows service imports
@@ -19,17 +20,20 @@ from netmiko import ConnectHandler
 from netmiko.exceptions import NetmikoTimeoutException, NetmikoAuthenticationException
 
 
-class VLANSwitcherService(win32serviceutil.ServiceFramework):
-    """Simple VLAN Switcher Windows Service"""
+class SecureVLANSwitcherService(win32serviceutil.ServiceFramework):
+    """Secure VLAN Switcher Windows Service with credential management"""
     
-    _svc_name_ = "VLANSwitcherService"
-    _svc_display_name_ = "VLAN Switcher Service"
-    _svc_description_ = "Automatically switches VLANs on network interface"
+    _svc_name_ = "SecureVLANSwitcherService"
+    _svc_display_name_ = "Secure VLAN Switcher Service"
+    _svc_description_ = "Automatically switches VLANs on network interface with secure credential management"
     
     def __init__(self, args):
         win32serviceutil.ServiceFramework.__init__(self, args)
         self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         self.is_alive = True
+        
+        # Service name for keyring
+        self.keyring_service = "VLANSwitcher"
         
         # Setup logging
         self.setup_logging()
@@ -50,7 +54,7 @@ class VLANSwitcherService(win32serviceutil.ServiceFramework):
         log_dir.mkdir(exist_ok=True)
         
         # Setup logger
-        log_file = log_dir / "service.log"
+        log_file = log_dir / "vlan_switcher.log"
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
@@ -61,8 +65,16 @@ class VLANSwitcherService(win32serviceutil.ServiceFramework):
         )
         self.logger = logging.getLogger(__name__)
         
+    def get_stored_credential(self, key):
+        """Retrieve a stored credential from keyring"""
+        try:
+            return keyring.get_password(self.keyring_service, key)
+        except Exception as e:
+            self.logger.warning(f"Could not retrieve stored credential {key}: {e}")
+        return None
+        
     def load_config(self):
-        """Load configuration from config.json"""
+        """Load configuration from config.json with secure credential support"""
         try:
             if hasattr(sys, '_MEIPASS'):
                 base_dir = Path(sys.executable).parent
@@ -76,7 +88,24 @@ class VLANSwitcherService(win32serviceutil.ServiceFramework):
                 return None
                 
             with open(config_file, 'r') as f:
-                config = json.load(f)                
+                config = json.load(f)
+            
+            # Load credentials from secure storage if not in config
+            if "password" not in config:
+                stored_password = self.get_stored_credential('switch_password')
+                if stored_password:
+                    config["password"] = stored_password
+                    self.logger.info("Using securely stored switch password")
+                else:
+                    self.logger.error("No switch password found in config or secure storage")
+                    return None
+            
+            if "enable_password" not in config:
+                stored_enable_password = self.get_stored_credential('switch_enable_password')
+                if stored_enable_password:
+                    config["enable_password"] = stored_enable_password
+                    self.logger.info("Using securely stored enable password")
+            
             self.logger.info("Configuration loaded successfully")
             return config
             
@@ -108,7 +137,7 @@ class VLANSwitcherService(win32serviceutil.ServiceFramework):
                 'host': self.config["switch_ip"],
                 'username': self.config["username"],
                 'password': self.config["password"],
-                'secret': self.config["enable_password"],
+                'secret': self.config.get("enable_password", ""),
                 'timeout': 10,
             }
             
@@ -128,10 +157,43 @@ class VLANSwitcherService(win32serviceutil.ServiceFramework):
                 self.logger.info(f"VLAN switch completed successfully")
                 self.logger.debug(f"Switch output: {output}")
                 
+                # Save the updated VLAN order back to config file
+                self.save_vlan_order()
+                
         except (NetmikoTimeoutException, NetmikoAuthenticationException) as e:
             self.logger.error(f"Network error: {e}")
         except Exception as e:
             self.logger.error(f"Error switching VLAN: {e}")
+    
+    def save_vlan_order(self):
+        """Save the updated VLAN order back to config file"""
+        try:
+            if hasattr(sys, '_MEIPASS'):
+                base_dir = Path(sys.executable).parent
+            else:
+                base_dir = Path(__file__).parent
+                
+            config_file = base_dir / "config.json"
+            
+            # Read current config
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            
+            # Update VLAN order
+            config["vlans"] = self.config["vlans"]
+            
+            # Write back (excluding sensitive data that might be in memory)
+            config_to_save = {k: v for k, v in config.items() if k not in ['password', 'enable_password']}
+            if 'password' in config and not self.get_stored_credential('switch_password'):
+                config_to_save['password'] = config['password']
+            if 'enable_password' in config and not self.get_stored_credential('switch_enable_password'):
+                config_to_save['enable_password'] = config['enable_password']
+            
+            with open(config_file, 'w') as f:
+                json.dump(config_to_save, f, indent=4)
+                
+        except Exception as e:
+            self.logger.warning(f"Could not save VLAN order: {e}")
     
     def SvcStop(self):
         """Stop the service"""
@@ -142,7 +204,7 @@ class VLANSwitcherService(win32serviceutil.ServiceFramework):
         
     def SvcDoRun(self):
         """Main service loop"""
-        self.logger.info("VLAN Switcher Service starting")
+        self.logger.info("Secure VLAN Switcher Service starting")
         
         if not self.config:
             self.logger.error("Service cannot start without valid configuration")
@@ -159,6 +221,7 @@ class VLANSwitcherService(win32serviceutil.ServiceFramework):
         self.logger.info(f"Schedule: Every {self.config['schedule_minutes']} minute(s)")
         self.logger.info(f"Interface: {self.config['interface']}")
         self.logger.info(f"VLANs: {self.config['vlans']}")
+        self.logger.info(f"VLAN count: {len(self.config['vlans'])}")
         
         try:
             # Schedule the VLAN switching
@@ -177,15 +240,15 @@ class VLANSwitcherService(win32serviceutil.ServiceFramework):
             self.logger.error(f"Service error: {e}")
             servicemanager.LogErrorMsg(f"Service error: {e}")
             
-        self.logger.info("VLAN Switcher Service stopped")
+        self.logger.info("Secure VLAN Switcher Service stopped")
 
 
 def run_debug_mode():
     """Run in debug mode (non-service mode for testing)"""
-    print("=" * 50)
-    print("VLAN Switcher - Debug Mode")
-    print("=" * 50)
-    print("Press Ctrl+C to stop\n")
+    print("=" * 60)
+    print("Secure VLAN Switcher - Debug Mode")
+    print("=" * 60)
+    print("Press Ctrl+C to stop\\n")
     
     # Setup logging for debug
     logging.basicConfig(
@@ -217,6 +280,31 @@ def run_debug_mode():
             
         with open(config_file, 'r') as f:
             config = json.load(f)
+        
+        # Load stored credentials if needed
+        keyring_service = "VLANSwitcher"
+        
+        if "password" not in config:
+            try:
+                stored_password = keyring.get_password(keyring_service, 'switch_password')
+                if stored_password:
+                    config["password"] = stored_password
+                    print("Using securely stored switch password")
+                else:
+                    print("ERROR: No switch password found in config or secure storage!")
+                    return
+            except Exception as e:
+                print(f"ERROR: Could not retrieve stored switch password: {e}")
+                return
+        
+        if "enable_password" not in config:
+            try:
+                stored_enable_password = keyring.get_password(keyring_service, 'switch_enable_password')
+                if stored_enable_password:
+                    config["enable_password"] = stored_enable_password
+                    print("Using securely stored enable password")
+            except Exception:
+                pass  # Enable password is optional
         
         print(f"Configuration loaded:")
         print(f"  Switch IP: {config['switch_ip']}")
@@ -251,7 +339,7 @@ def run_debug_mode():
                     'host': config["switch_ip"],
                     'username': config["username"],
                     'password': config["password"],
-                    'secret': config["enable_password"],
+                    'secret': config.get("enable_password", ""),
                     'timeout': 10,
                 }
                 
@@ -270,6 +358,22 @@ def run_debug_mode():
                     output = connection.send_config_set(commands)
                     logger.info(f"VLAN switch completed successfully")
                     logger.debug(f"Switch output: {output}")
+                    
+                    # Save updated config
+                    with open(config_file, 'w') as f:
+                        # Don't save passwords if they're stored securely
+                        config_to_save = dict(config)
+                        try:
+                            if keyring.get_password(keyring_service, 'switch_password'):
+                                config_to_save.pop('password', None)
+                        except:
+                            pass
+                        try:
+                            if keyring.get_password(keyring_service, 'switch_enable_password'):
+                                config_to_save.pop('enable_password', None)
+                        except:
+                            pass
+                        json.dump(config_to_save, f, indent=4)
                     
             except (NetmikoTimeoutException, NetmikoAuthenticationException) as e:
                 logger.error(f"Network error: {e}")
@@ -294,7 +398,7 @@ def run_debug_mode():
             time.sleep(1)
             
     except KeyboardInterrupt:
-        print("\nStopping debug mode...")
+        print("\\nStopping debug mode...")
     except Exception as e:
         print(f"Debug mode error: {e}")
         import traceback
@@ -303,7 +407,7 @@ def run_debug_mode():
 
 if __name__ == '__main__':
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='VLAN Switcher Service')
+    parser = argparse.ArgumentParser(description='Secure VLAN Switcher Service')
     parser.add_argument('action', nargs='?', 
                        choices=['install', 'start', 'stop', 'remove', 'debug'],
                        help='Service action to perform')
@@ -323,24 +427,24 @@ if __name__ == '__main__':
                 sys.argv = [sys.argv[0], 'install', '--username', args.username, '--password', args.password] + unknown
             
             # Handle service commands
-            win32serviceutil.HandleCommandLine(VLANSwitcherService)
+            win32serviceutil.HandleCommandLine(SecureVLANSwitcherService)
         elif len(sys.argv) == 1:
             # No arguments - running as service
             servicemanager.Initialize()
-            servicemanager.PrepareToHostSingle(VLANSwitcherService)
+            servicemanager.PrepareToHostSingle(SecureVLANSwitcherService)
             servicemanager.StartServiceCtrlDispatcher()
         else:
             # Show help
             parser.print_help()
-            print("\nExamples:")
-            print("  python vlan_switcher.py install          - Install service as Local System")
-            print("  python vlan_switcher.py install --username USER --password PASS")
-            print("  python vlan_switcher.py start            - Start the service")
-            print("  python vlan_switcher.py stop             - Stop the service") 
-            print("  python vlan_switcher.py remove           - Remove the service")
-            print("  python vlan_switcher.py debug            - Run in debug mode")
+            print("\\nExamples:")
+            print("  python secure_vlan_switcher.py install          - Install service as Local System")
+            print("  python secure_vlan_switcher.py install --username USER --password PASS")
+            print("  python secure_vlan_switcher.py start            - Start the service")
+            print("  python secure_vlan_switcher.py stop             - Stop the service") 
+            print("  python secure_vlan_switcher.py remove           - Remove the service")
+            print("  python secure_vlan_switcher.py debug            - Run in debug mode")
             
     except Exception as e:
         print(f"Error: {e}")
-        print("\nMake sure you're running as Administrator for service operations.")
+        print("\\nMake sure you're running as Administrator for service operations.")
         sys.exit(1)

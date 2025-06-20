@@ -2,3 +2,5 @@ netmiko
 schedule
 pywin32
 pyinstaller
+keyring
+cryptography

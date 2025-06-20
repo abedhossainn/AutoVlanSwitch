@@ -5,15 +5,28 @@ import servicemanager
 import logging
 import sys
 import os
+import subprocess
 from pathlib import Path
 
 # Get the directory where the executable/script is located
 if hasattr(sys, '_MEIPASS'):
     # Running as PyInstaller executable
     BASE_DIR = Path(sys.executable).parent
+    # When running as compiled executable, we don't need Python path manipulation
+    USING_PYINSTALLER = True
 else:
     # Running as Python script
     BASE_DIR = Path(__file__).parent
+    USING_PYINSTALLER = False
+    
+    # Determine the correct Python executable to use
+    # First check for virtual environment
+    venv_python = BASE_DIR / ".venv" / "Scripts" / "python.exe"
+    if venv_python.exists():
+        PYTHON_EXECUTABLE = str(venv_python)
+    else:
+        # Otherwise use the current Python executable
+        PYTHON_EXECUTABLE = sys.executable
 
 # Add the base directory to the Python path
 sys.path.insert(0, str(BASE_DIR))
@@ -29,7 +42,7 @@ class VLANSwitcherWindowsService(win32serviceutil.ServiceFramework):
         win32serviceutil.ServiceFramework.__init__(self, args)
         self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         self.is_alive = True
-          # Setup logging for service
+        # Setup logging for service
         log_dir = BASE_DIR / "logs"
         log_dir.mkdir(exist_ok=True)
         
@@ -138,10 +151,18 @@ if __name__ == '__main__':
             # Parse known args to handle pywin32 service arguments
             args, unknown = parser.parse_known_args()
             
+            # If we're installing the service and not using PyInstaller, we need to specify the Python executable
+            if args.action == 'install' and not USING_PYINSTALLER:
+                # When installing service, make sure to specify the Python executable path
+                sys.argv.extend(['--exe', PYTHON_EXECUTABLE])
+            
             # If installing with credentials, modify sys.argv for win32serviceutil
             if args.action == 'install' and args.username and args.password:
                 # Reconstruct sys.argv for win32serviceutil with user credentials
-                sys.argv = [sys.argv[0], 'install', '--username', args.username, '--password', args.password] + unknown
+                if USING_PYINSTALLER:
+                    sys.argv = [sys.argv[0], 'install', '--username', args.username, '--password', args.password] + unknown
+                else:
+                    sys.argv = [sys.argv[0], 'install', '--username', args.username, '--password', args.password, '--exe', PYTHON_EXECUTABLE] + unknown
             
             # Handle command line (install, start, stop, remove, etc.)
             win32serviceutil.HandleCommandLine(VLANSwitcherWindowsService)
